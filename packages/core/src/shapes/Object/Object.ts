@@ -210,7 +210,45 @@ export class FabricObject<
 
   declare objectCaching: boolean;
 
-  declare clipPath?: FabricObject;
+  /**
+   * The object used to clip this object, backed by the protected `_clipPath` field.
+   * The accessor keeps the back reference {@link FabricObject#clipPathTarget} in sync
+   * and invalidates the cache, so that reassigning or removing the clipPath
+   * ( `object.clipPath = ...` ) is reflected at the next render
+   */
+  get clipPath(): FabricObject | undefined {
+    return this._clipPath;
+  }
+
+  set clipPath(clipPath: FabricObject | undefined) {
+    const prevClipPath = this._clipPath;
+    if (prevClipPath === clipPath) {
+      return;
+    }
+    // the svg parser assigns a temporary string reference ( `url(#id)` )
+    // before resolving it to an actual object, ignore non object values
+    if (prevClipPath instanceof FabricObject) {
+      if (prevClipPath.clipPathTarget === this) {
+        prevClipPath.clipPathTarget = undefined;
+      }
+    }
+    this._clipPath = clipPath;
+    if (clipPath instanceof FabricObject) {
+      clipPath.clipPathTarget = this;
+    }
+    // the clipPath is drawn into the object cache, so the cache needs a refresh
+    this._set('dirty', true);
+  }
+
+  declare protected _clipPath?: FabricObject;
+
+  /**
+   * A reference to the object this object is assigned to as `clipPath`, if any.
+   * Used to invalidate the cache of the clipped object (and of its cached ancestors)
+   * when this object changes
+   */
+  declare clipPathTarget?: FabricObject;
+
   declare inverted: boolean;
   declare absolutePositioned: boolean;
   declare centeredRotation: boolean;
@@ -626,6 +664,14 @@ export class FabricObject<
             key,
           ))) &&
       this.parent._set('dirty', true);
+
+    // a change on an object that is used as a clipPath invalidates the cache
+    // of the object it clips, since the clipPath is drawn into that cache.
+    // the dirty check guards against loops in case of circular clipPath assignments
+    const clipPathTarget = this.clipPathTarget;
+    if (clipPathTarget && !clipPathTarget.dirty && (this.dirty || isChanged)) {
+      clipPathTarget._set('dirty', true);
+    }
 
     return this;
   }

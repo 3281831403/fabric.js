@@ -4,6 +4,7 @@ import { Rect } from '../Rect';
 import { Color } from '../../color/Color';
 import { Circle } from '../Circle';
 import { FabricText, Object, version } from '../../../../../fabric';
+import { Group } from '../Group';
 
 describe('Object - clipPath', () => {
   test('constructor & properties', () => {
@@ -193,5 +194,105 @@ describe('Object - clipPath', () => {
       'stroke style is reset',
     ).toBe(0);
     expect(canvas.contextContainer.globalAlpha, 'globalAlpha is reset').toBe(1);
+  });
+
+  describe('cache invalidation', () => {
+    const objectWithClipPath = () => {
+      const rect = new Rect({ width: 100, height: 100 });
+      rect.clipPath = new Circle({ radius: 50 });
+      // simulate a completed render
+      rect.dirty = false;
+      return rect;
+    };
+
+    test('assigning a clipPath marks the object dirty', () => {
+      const rect = new Rect({ width: 100, height: 100 });
+      rect.dirty = false;
+
+      rect.clipPath = new Circle({ radius: 50 });
+
+      expect(rect.dirty, 'object is dirty').toBe(true);
+      expect(
+        rect.clipPath.clipPathTarget,
+        'clipPath references the clipped object',
+      ).toBe(rect);
+    });
+
+    test('removing a clipPath marks the object dirty and detaches it', () => {
+      const rect = objectWithClipPath();
+      const clipPath = rect.clipPath!;
+
+      rect.clipPath = undefined;
+
+      expect(rect.dirty, 'object is dirty').toBe(true);
+      expect(
+        clipPath.clipPathTarget,
+        'detached clipPath has no target',
+      ).toBeUndefined();
+    });
+
+    test('replacing a clipPath moves the back reference to the new clipPath', () => {
+      const rect = objectWithClipPath();
+      const prevClipPath = rect.clipPath!;
+      const nextClipPath = new Rect({ width: 20, height: 20 });
+
+      rect.clipPath = nextClipPath;
+
+      expect(rect.dirty, 'object is dirty').toBe(true);
+      expect(prevClipPath.clipPathTarget, 'previous clipPath is detached').toBe(
+        undefined,
+      );
+      expect(nextClipPath.clipPathTarget, 'new clipPath is attached').toBe(
+        rect,
+      );
+    });
+
+    test('mutating the clipPath geometry marks the object dirty', () => {
+      const rect = objectWithClipPath();
+
+      rect.clipPath!.set({ radius: 20, left: 10 });
+
+      expect(rect.dirty, 'object is dirty').toBe(true);
+    });
+
+    test('mutating a nested clipPath marks the object dirty', () => {
+      const rect = objectWithClipPath();
+      const nested = new Circle({ radius: 10 });
+      rect.clipPath!.clipPath = nested;
+      rect.dirty = false;
+      rect.clipPath!.dirty = false;
+
+      nested.set('radius', 20);
+
+      expect(rect.clipPath!.dirty, 'clipPath is dirty').toBe(true);
+      expect(rect.dirty, 'object is dirty').toBe(true);
+    });
+
+    test('mutating the clipPath of an object in a group dirties the group', () => {
+      const rect = objectWithClipPath();
+      const group = new Group([rect]);
+      rect.dirty = false;
+      group.dirty = false;
+
+      rect.clipPath!.set('radius', 20);
+
+      expect(rect.dirty, 'object is dirty').toBe(true);
+      expect(group.dirty, 'group cache is invalidated').toBe(true);
+    });
+
+    test('clipPath stays wired to the object after deserialization', async () => {
+      const rect = objectWithClipPath();
+      const newRect = await Rect.fromObject(rect.toObject());
+
+      expect(
+        newRect.clipPath!.clipPathTarget,
+        'clipPath references the enlived object',
+      ).toBe(newRect);
+
+      newRect.dirty = false;
+      newRect.clipPath!.set('radius', 20);
+
+      expect(newRect.dirty, 'enlived object is dirty').toBe(true);
+    });
   });
 });

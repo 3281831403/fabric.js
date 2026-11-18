@@ -264,8 +264,8 @@ export class ElementsParser {
       );
       obj.clipPath = clipPath;
     } else {
-      // if clip-path does not resolve to any element, delete the property.
-      delete obj.clipPath;
+      // if clip-path does not resolve to any element, unset the property.
+      obj.clipPath = undefined;
       return;
     }
   }
