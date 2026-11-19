@@ -73,8 +73,8 @@ const rotateObjectWithSnapping: TransformActionHandler = (
   angle %= 360;
 
   const hasRotated = target.angle !== angle;
-  // TODO: why aren't we using set?
-  target.angle = angle;
+  // go through `set` so cached coordinates are invalidated lazily
+  target.set('angle', angle);
   return hasRotated;
 };
 

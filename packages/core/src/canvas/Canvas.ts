@@ -848,6 +848,10 @@ export class Canvas extends SelectableCanvas implements CanvasOptions {
     if (transform) {
       this._finalizeCurrentTransform(e);
       shouldRender = transform.actionPerformed;
+      // the pointer can be released outside of the dragged object, where
+      // `target` lookup below does not return it; reset the moving state here
+      // so controls and borders don't stay at `borderOpacityWhenMoving`
+      transform.target.isMoving = false;
     }
     if (!isClick) {
       const targetWasActive = target === this._activeObject;

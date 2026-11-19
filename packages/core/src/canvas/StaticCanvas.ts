@@ -364,6 +364,9 @@ export class StaticCanvas<
   setViewportTransform(vpt: TMat2D) {
     this.viewportTransform = vpt;
     this.calcViewportBoundaries();
+    // control coordinates are expressed in viewport coordinates and have to
+    // be recalculated lazily on the next consumption
+    this.forEachObject((object) => object.invalidateOCoords());
     this.renderOnAddRemove && this.requestRenderAll();
   }
 

@@ -1,5 +1,5 @@
 import type { CollectionEvents, ObjectEvents } from '../EventTypeDefs';
-import { createCollectionMixin } from '../Collection';
+import { createCollectionMixin, isCollection } from '../Collection';
 import type {
   TClassProperties,
   TSVGReviver,
@@ -16,6 +16,7 @@ import {
 } from '../util/misc/objectEnlive';
 import { applyTransformToObject } from '../util/misc/objectTransforms';
 import { FabricObject } from './Object/FabricObject';
+import { geometryProperties } from './Object/ObjectGeometry';
 import { Rect } from './Rect';
 import { classRegistry } from '../ClassRegistry';
 import type { FabricObjectProps, SerializedObjectProps } from './Object/types';
@@ -299,8 +300,28 @@ export class Group
       (this._objects || []).forEach((object) => {
         object._set(key, value);
       });
+    } else if (
+      prev !== value &&
+      (geometryProperties as readonly string[]).includes(key)
+    ) {
+      // a group transform change moves every child in the scene/viewport plane
+      this._invalidateNestedCoords();
     }
     return this;
+  }
+
+  /**
+   * Marks control coordinates of nested objects as out of date so that they
+   * are recalculated lazily when consumed.
+   * @private
+   */
+  _invalidateNestedCoords() {
+    this.forEachObject((object) => {
+      object.invalidateOCoords?.();
+      if (isCollection(object)) {
+        object._invalidateNestedCoords();
+      }
+    });
   }
 
   /**

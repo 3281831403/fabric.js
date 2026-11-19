@@ -22,7 +22,10 @@ export class CommonMethods<EventSpec> extends Observable<EventSpec> {
   }
 
   /**
-   * Sets property to a given value. When changing position/dimension -related properties (left, top, scale, angle, etc.) `set` does not update position of object's borders/controls. If you need to update those, call `setCoords()`.
+   * Sets property to a given value. When changing position/dimension-related
+   * properties (left, top, scale, angle, etc.) the cached borders/controls
+   * coordinates are invalidated and recalculated lazily on the next read,
+   * so they always reflect the new value without a manual `setCoords()` call.
    * @param {String|Object} key Property name or object (if object, iterate over the object properties)
    * @param {Object|Function} value Property value (if function, the value is passed into it and its return value is used as a new one)
    */

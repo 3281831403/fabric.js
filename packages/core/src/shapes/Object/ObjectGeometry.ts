@@ -6,7 +6,16 @@ import type {
   TOriginX,
   TOriginY,
 } from '../../typedefs';
-import { SCALE_X, SCALE_Y, iMatrix } from '../../constants';
+import {
+  CENTER,
+  LEFT,
+  TOP,
+  SCALE_X,
+  SCALE_Y,
+  SKEW_X,
+  SKEW_Y,
+  iMatrix,
+} from '../../constants';
 import { Intersection } from '../../Intersection';
 import { Point } from '../../Point';
 import { makeBoundingBoxFromPoints } from '../../util/misc/boundingBoxFromPoints';
@@ -34,7 +43,27 @@ import { degreesToRadians } from '../../util/misc/radiansDegreesConversion';
 import { CommonMethods } from '../../CommonMethods';
 import type { BaseProps } from './types/BaseProps';
 import type { FillStrokeProps } from './types/FillStrokeProps';
-import { CENTER, LEFT, TOP } from '../../constants';
+
+/**
+ * Properties that influence {@link ObjectGeometry#calcACoords} output.
+ * A change of any of these invalidates the cached `aCoords`.
+ */
+export const geometryProperties = [
+  TOP,
+  LEFT,
+  'width',
+  'height',
+  SCALE_X,
+  SCALE_Y,
+  'flipX',
+  'flipY',
+  'originX',
+  'originY',
+  'angle',
+  'strokeWidth',
+  SKEW_X,
+  SKEW_Y,
+] as const;
 
 type TMatrixCache = {
   key: number[];
@@ -55,6 +84,14 @@ export class ObjectGeometry<EventSpec extends ObjectEvents = ObjectEvents>
   declare padding: number;
 
   /**
+   * Cached scene coordinates. Cleared (`undefined`) whenever a geometry
+   * property changes and rebuilt lazily on the next read, so consumers always
+   * see coordinates matching the current object state without a manual
+   * {@link setCoords} call. Exposed read-only through {@link aCoords}.
+   */
+  protected _aCoords?: TACoords;
+
+  /**
    * Describe object's corner position in scene coordinates.
    * The coordinates are derived from the following:
    * left, top, width, height, scaleX, scaleY, skewX, skewY, angle, strokeWidth.
@@ -62,7 +99,13 @@ export class ObjectGeometry<EventSpec extends ObjectEvents = ObjectEvents>
    * The coordinates get updated with {@link setCoords}.
    * You can calculate them without updating with {@link calcACoords()}
    */
-  declare aCoords: TACoords;
+  get aCoords(): TACoords {
+    return this._aCoords || (this._aCoords = this.calcACoords());
+  }
+
+  set aCoords(value: TACoords) {
+    this._aCoords = value;
+  }
 
   /**
    * storage cache for object transform matrix
@@ -204,8 +247,7 @@ export class ObjectGeometry<EventSpec extends ObjectEvents = ObjectEvents>
    * @return {Point[]} [tl, tr, br, bl] in the scene plane
    */
   getCoords(): Point[] {
-    const { tl, tr, br, bl } =
-      this.aCoords || (this.aCoords = this.calcACoords());
+    const { tl, tr, br, bl } = this.aCoords;
     const coords = [tl, tr, br, bl];
     if (this.group) {
       const t = this.group.calcTransformMatrix();
@@ -449,9 +491,24 @@ export class ObjectGeometry<EventSpec extends ObjectEvents = ObjectEvents>
    * See {@link https://github.com/fabricjs/fabric.js/wiki/When-to-call-setCoords} and {@link http://fabric5.fabricjs.com/fabric-gotchas}
    */
   setCoords(): void {
-    this.aCoords = this.calcACoords();
+    this._aCoords = this.calcACoords();
   }
 
+  /**
+   * Clears the cached coordinates so that they are recalculated lazily on the
+   * next read, without requiring a manual {@link setCoords} call. Interactive
+   * objects also clear their viewport-dependent control coordinates.
+   */
+  invalidateCoords(): void {
+    this._aCoords = undefined;
+  }
+
+  /**
+   * Marks only the viewport-dependent control coordinates as out of date.
+   * Implemented by interactive objects; plain geometry objects have no
+   * control coordinates.
+   */
+  invalidateOCoords?(): void;
   transformMatrixKey(skipGroup = false): number[] {
     let prefix: number[] = [];
     if (!skipGroup && this.group) {

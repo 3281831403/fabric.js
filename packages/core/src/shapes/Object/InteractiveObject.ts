@@ -24,6 +24,19 @@ import { createObjectDefaultControls } from '../../controls/commonControls';
 import { interactiveObjectDefaultValues } from './defaultValues';
 import { SCALE } from '../../constants';
 
+/**
+ * Properties that influence {@link InteractiveFabricObject#calcOCoords} output
+ * beyond the geometry properties handled by
+ * {@link ObjectGeometry#invalidateCoords}.
+ */
+const interactiveCoordProperties = [
+  'controls',
+  'cornerSize',
+  'touchCornerSize',
+  'padding',
+  'hasControls',
+];
+
 export type TOCoord = Point & {
   corner: TCornerPoint;
   touchCorner: TCornerPoint;
@@ -90,12 +103,25 @@ export class InteractiveFabricObject<
   declare moveCursor: CSSStyleDeclaration['cursor'] | null;
 
   /**
+   * Cached control coordinates. Cleared whenever geometry, viewport, padding,
+   * control sizes or the {@link controls} set change and rebuilt lazily on the
+   * next read through {@link _getOCoords}. Exposed through {@link oCoords}.
+   */
+  protected _oCoords?: Record<string, TOCoord>;
+
+  /**
    * The object's controls' position in viewport coordinates
    * Calculated by {@link Control#positionHandler} and {@link Control#calcCornerCoords}, depending on {@link padding}.
    * `corner/touchCorner` describe the 4 points forming the interactive area of the corner.
    * Used to draw and locate controls.
    */
-  declare oCoords: Record<string, TOCoord>;
+  get oCoords(): Record<string, TOCoord> {
+    return this._getOCoords();
+  }
+
+  set oCoords(value: Record<string, TOCoord> | undefined) {
+    this._oCoords = value;
+  }
 
   /**
    * keeps the value of the last hovered corner during mouse move.
@@ -196,13 +222,15 @@ export class InteractiveFabricObject<
 
   getActiveControl() {
     const key = this.__corner;
-    return key
-      ? {
-          key,
-          control: this.controls[key],
-          coord: this.oCoords[key],
-        }
-      : undefined;
+    if (key) {
+      const coords = this._getOCoords();
+      return {
+        key,
+        control: this.controls[key],
+        coord: coords[key],
+      };
+    }
+    return undefined;
   }
 
   /**
@@ -225,10 +253,14 @@ export class InteractiveFabricObject<
     }
 
     this.__corner = undefined;
-    const cornerEntries = Object.entries(this.oCoords);
+    const oCoords = this._getOCoords();
+    const cornerEntries = Object.entries(this.controls);
     for (let i = cornerEntries.length - 1; i >= 0; i--) {
-      const [key, corner] = cornerEntries[i];
-      const control = this.controls[key];
+      const [key, control] = cornerEntries[i];
+      const corner = oCoords[key];
+      if (!corner) {
+        continue;
+      }
 
       if (
         control.shouldActivate(
@@ -241,7 +273,7 @@ export class InteractiveFabricObject<
         // this.canvas.contextTop.fillRect(pointer.x - 1, pointer.y - 1, 2, 2);
         this.__corner = key;
 
-        return { key, control, coord: this.oCoords[key] };
+        return { key, control, coord: oCoords[key] };
       }
     }
 
@@ -347,7 +379,60 @@ export class InteractiveFabricObject<
    */
   setCoords(): void {
     super.setCoords();
-    this.canvas && (this.oCoords = this.calcOCoords());
+    this.canvas && (this._oCoords = this.calcOCoords());
+  }
+
+  /**
+   * Returns up-to-date control coordinates, recalculating them lazily when the
+   * object's geometry, viewport, padding, control sizes or control set changed.
+   * No canvas means viewport coordinates cannot be computed, so an empty
+   * record is returned.
+   */
+  _getOCoords(): Record<string, TOCoord> {
+    const controlKeys = Object.keys(this.controls);
+    const stale =
+      !this._oCoords ||
+      // the control set was replaced or controls were added/removed
+      controlKeys.some((key) => !this._oCoords![key]) ||
+      Object.keys(this._oCoords).some((key) => !this.controls[key]);
+    if (this.canvas) {
+      if (stale) {
+        this._oCoords = this.calcOCoords();
+      }
+    } else if (!this._oCoords) {
+      this._oCoords = {};
+    }
+    return this._oCoords!;
+  }
+
+  /**
+   * Clears the cached scene and control coordinates so that they are
+   * recalculated lazily on the next read.
+   */
+  invalidateCoords(): void {
+    super.invalidateCoords();
+    this._oCoords = undefined;
+  }
+
+  /**
+   * Clears only the viewport-dependent control coordinates.
+   * `aCoords` live in the scene plane and are not affected by viewport changes.
+   */
+  invalidateOCoords(): void {
+    this._oCoords = undefined;
+  }
+
+  /**
+   * In addition to geometry changes, control related properties and the
+   * control set itself clear the cached control coordinates.
+   */
+  _set(key: string, value: any) {
+    const isChanged = this[key as keyof this] !== value;
+    super._set(key, value);
+    if (isChanged && interactiveCoordProperties.includes(key)) {
+      this.invalidateOCoords();
+    }
+    return this;
   }
 
   /**
@@ -576,9 +661,13 @@ export class InteractiveFabricObject<
       ctx.strokeStyle = options.cornerStrokeColor;
     }
     this._setLineDash(ctx, options.cornerDashArray);
+    const oCoords = this._getOCoords();
     this.forEachControl((control, key) => {
       if (control.getVisibility(this, key)) {
-        const p = this.oCoords[key];
+        const p = oCoords[key];
+        if (!p) {
+          return;
+        }
         control.render(ctx, p.x, p.y, options, this);
       }
     });

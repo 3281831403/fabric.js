@@ -67,7 +67,7 @@ import type {
   ColorAnimationOptions,
   ValueAnimationOptions,
 } from '../../util/animation/types';
-import { ObjectGeometry } from './ObjectGeometry';
+import { ObjectGeometry, geometryProperties } from './ObjectGeometry';
 
 type TAncestor = FabricObject;
 type TCollection = Group;
@@ -615,6 +615,11 @@ export class FabricObject<
       (this.constructor as typeof FabricObject).cacheProperties.includes(key)
     ) {
       this.dirty = true;
+    }
+    // geometry changes invalidate the cached scene/control coordinates,
+    // which are rebuilt lazily on the next read
+    if (isChanged && (geometryProperties as readonly string[]).includes(key)) {
+      this.invalidateCoords();
     }
     // a dirty child makes the parent dirty.
     // but a non dirty child does not make the parent not dirty.

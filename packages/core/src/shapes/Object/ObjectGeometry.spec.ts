@@ -382,22 +382,21 @@ describe('fabric.ObjectGeometry', () => {
 
     cObj.set('left', 300).set('top', 300);
 
-    // coords should still correspond to initial one, even after invoking `set`
-    expect(cObj.oCoords.tl.x).toBe(150);
-    expect(cObj.oCoords.tl.y).toBe(150);
-    expect(cObj.oCoords.tr.x).toBe(250);
-    expect(cObj.oCoords.tr.y).toBe(150);
-    expect(cObj.oCoords.bl.x).toBe(150);
-    expect(cObj.oCoords.bl.y).toBe(250);
-    expect(cObj.oCoords.br.x).toBe(250);
-    expect(cObj.oCoords.br.y).toBe(250);
-    expect(cObj.oCoords.mtr.x).toBe(200);
-    expect(cObj.oCoords.mtr.y).toBe(110);
+    // coords follow the new position automatically on read, no setCoords needed
+    expect(cObj.oCoords.tl.x).toBe(250);
+    expect(cObj.oCoords.tl.y).toBe(250);
+    expect(cObj.oCoords.tr.x).toBe(350);
+    expect(cObj.oCoords.tr.y).toBe(250);
+    expect(cObj.oCoords.bl.x).toBe(250);
+    expect(cObj.oCoords.bl.y).toBe(350);
+    expect(cObj.oCoords.br.x).toBe(350);
+    expect(cObj.oCoords.br.y).toBe(350);
+    expect(cObj.oCoords.mtr.x).toBe(300);
+    expect(cObj.oCoords.mtr.y).toBe(210);
 
-    // recalculate coords
+    // an explicit setCoords keeps producing the same, up-to-date values
     cObj.setCoords();
 
-    // check that coords are now updated
     expect(cObj.oCoords.tl.x).toBe(250);
     expect(cObj.oCoords.tl.y).toBe(250);
     expect(cObj.oCoords.tr.x).toBe(350);
