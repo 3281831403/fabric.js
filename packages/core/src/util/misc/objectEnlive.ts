@@ -1,4 +1,3 @@
-import { noop } from '../../constants';
 import type { FabricObject } from '../../shapes/Object/FabricObject';
 import type {
   Abortable,
@@ -10,7 +9,11 @@ import { createImage } from './dom';
 import { classRegistry } from '../../ClassRegistry';
 import type { BaseFilter } from '../../filters/BaseFilter';
 import type { FabricObject as BaseFabricObject } from '../../shapes/Object/Object';
-import { FabricError, SignalAbortedError } from '../internals/console';
+import {
+  FabricError,
+  ResourceSkippedError,
+  SignalAbortedError,
+} from '../internals/console';
 import type { Shadow } from '../../Shadow';
 
 export type LoadImageOptions = Abortable & {
@@ -38,7 +41,7 @@ export const loadImage = (
       .then(() => resourceValidator(url))
       .then((isAllowed) => {
         if (!isAllowed) {
-          throw new FabricError(`Resource '${url}' is not allowed`);
+          throw new ResourceSkippedError(`Resource '${url}' is not allowed`);
         }
         if (signal && signal.aborted) {
           throw new SignalAbortedError('loadImage');
@@ -105,34 +108,46 @@ export type EnlivenObjectOptions<T extends EnlivenedObject = EnlivenedObject> =
  * @param {EnlivenObjectOptions} [options]
  * @param {(serializedObj: object, instance: FabricObject) => any} [options.reviver] Method for further parsing of object elements,
  * called after each fabric object created.
+ * If an object can't be enlivened the reviver is called with the error and may return a replacement instance.
+ * Without a reviver, an object that can't be enlivened rejects the entire promise.
+ * Resources skipped by `resourceValidator` are omitted silently.
  * @param {AbortSignal} [options.signal] handle aborting, see https://developer.mozilla.org/en-US/docs/Web/API/AbortController/signal
  * @returns {Promise<FabricObject[]>}
  */
 export const enlivenObjects = <T extends EnlivenedObject>(
   objects: any[],
-  { signal, reviver = noop, ...options }: EnlivenObjectOptions<NoInfer<T>> = {},
-) =>
-  new Promise<T[]>((resolve, reject) => {
+  { signal, reviver, ...options }: EnlivenObjectOptions<NoInfer<T>> = {},
+) => {
+  if (signal && signal.aborted) {
+    return Promise.reject(new SignalAbortedError('enlivenObjects'));
+  }
+  return new Promise<T[]>((resolve, reject) => {
     const instances: T[] = [];
     signal && signal.addEventListener('abort', reject, { once: true });
     Promise.allSettled(
       objects.map((obj) =>
-        classRegistry
-          .getClass<
-            Constructor<T> & {
-              fromObject(options: any, context: Abortable): Promise<T>;
-            }
-          >(obj.type)
-          .fromObject(obj, { signal, ...options }),
+        // resolve the class asynchronously so that an unregistered type
+        // is treated as a per-object failure, same as any loading error
+        Promise.resolve().then(() =>
+          classRegistry
+            .getClass<
+              Constructor<T> & {
+                fromObject(
+                  options: any,
+                  context: EnlivenObjectOptions<NoInfer<T>>,
+                ): Promise<T>;
+              }
+            >(obj.type)
+            .fromObject(obj, { signal, reviver, ...options }),
+        ),
       ),
     )
       .then(async (elementsResult) => {
         for (const [index, result] of elementsResult.entries()) {
           if (result.status === 'fulfilled') {
-            await reviver(objects[index], result.value);
             instances.push(result.value);
-          }
-          if (result.status === 'rejected') {
+            reviver && (await reviver(objects[index], result.value));
+          } else if (reviver) {
             const fallback = await reviver(
               objects[index],
               undefined,
@@ -141,6 +156,9 @@ export const enlivenObjects = <T extends EnlivenedObject>(
             if (fallback) {
               instances.push(fallback);
             }
+          } else if (!(result.reason instanceof ResourceSkippedError)) {
+            // without a reviver a bad object rejects the entire load
+            throw result.reason;
           }
         }
         resolve(instances);
@@ -157,11 +175,14 @@ export const enlivenObjects = <T extends EnlivenedObject>(
         signal && signal.removeEventListener('abort', reject);
       });
   });
+};
 
 /**
  * Creates corresponding fabric instances residing in an object, e.g. `clipPath`
  * @param {Object} object with properties to enlive ( fill, stroke, clipPath, path )
  * @param {object} [options]
+ * @param {(serializedObj: object, instance: FabricObject) => any} [options.reviver] Method for further parsing of object elements,
+ * called after each fabric object created, see {@link enlivenObjects}
  * @param {AbortSignal} [options.signal] handle aborting, see https://developer.mozilla.org/en-US/docs/Web/API/AbortController/signal
  * @returns {Promise<Record<string, FabricObject | TFiller | null>>} the input object with enlived values
  */
@@ -169,9 +190,12 @@ export const enlivenObjectEnlivables = <
   R = Record<string, FabricObject | TFiller | null>,
 >(
   serializedObject: any,
-  { signal, ...options }: Abortable = {},
-) =>
-  new Promise<R>((resolve, reject) => {
+  { signal, reviver, ...options }: EnlivenObjectOptions<any> = {},
+) => {
+  if (signal && signal.aborted) {
+    return Promise.reject(new SignalAbortedError('enlivenObjectEnlivables'));
+  }
+  return new Promise<R>((resolve, reject) => {
     const instances: (FabricObject | TFiller | Shadow)[] = [];
     signal && signal.addEventListener('abort', reject, { once: true });
     // enlive every possible property
@@ -182,12 +206,14 @@ export const enlivenObjectEnlivables = <
       /**
        * clipPath or shadow or gradient or text on a path or a pattern,
        * or the backgroundImage or overlayImage of canvas
-       * If we have a type and there is a class registered for it, we enlive it.
-       * If there is no class registered for it we return the value as is
+       * A typed value must correspond to a registered class.
+       * A value that can't be enlivened follows the same policy as any other
+       * bad object (reviver fallback or rejection) and is never left as raw JSON.
        * */
-      if (value.type && classRegistry.has(value.type)) {
+      if (value.type) {
         return enlivenObjects<FabricObject | Shadow | TFiller>([value], {
           signal,
+          reviver,
           ...options,
         }).then(([enlived]) => {
           enlived && instances.push(enlived);
@@ -216,3 +242,4 @@ export const enlivenObjectEnlivables = <
         signal && signal.removeEventListener('abort', reject);
       });
   });
+};

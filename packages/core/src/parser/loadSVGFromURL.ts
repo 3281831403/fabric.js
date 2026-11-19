@@ -2,7 +2,7 @@ import { createEmptyResponse } from './parseSVGDocument';
 import { loadSVGFromString } from './loadSVGFromString';
 import type { SVGParsingOutput, TSvgReviverCallback } from './typedefs';
 import type { LoadImageOptions } from '../util/misc/objectEnlive';
-import { FabricError } from '../util/internals/console';
+import { FabricError, SignalAbortedError } from '../util/internals/console';
 
 /**
  * Takes url corresponding to an SVG document, and parses it into a set of fabric objects.
@@ -23,6 +23,9 @@ export function loadSVGFromURL(
   reviver?: TSvgReviverCallback,
   options: LoadImageOptions = {},
 ): Promise<SVGParsingOutput> {
+  if (options.signal && options.signal.aborted) {
+    return Promise.reject(new SignalAbortedError('loadSVGFromURL'));
+  }
   return fetch(url.replace(/^\n\s*/, '').trim(), {
     signal: options.signal,
   })
@@ -35,7 +38,13 @@ export function loadSVGFromURL(
     .then((svgText) => {
       return loadSVGFromString(svgText, reviver, options);
     })
-    .catch(() => {
+    .catch((error) => {
+      if (error instanceof SignalAbortedError) {
+        throw error;
+      }
+      if (options.signal && options.signal.aborted) {
+        throw new SignalAbortedError('loadSVGFromURL');
+      }
       // this is an unhappy path, we dont care about speed
       return createEmptyResponse();
     });

@@ -1413,16 +1413,14 @@ describe('Canvas', () => {
     expect(obj.get('path').length > 0).toBeTruthy();
   });
 
-  it('loads from JSON string with loadFromJSON with images not existing', async () => {
+  it('rejects loading JSON with images not existing and no reviver, leaving the canvas unchanged', async () => {
     expect(canvas.loadFromJSON).toBeTypeOf('function');
-    await canvas.loadFromJSON(ERROR_IMAGE_JSON);
+    canvas.add(new Rect({ width: 10, height: 10 }));
 
-    const obj = canvas.item(0);
+    await expect(canvas.loadFromJSON(ERROR_IMAGE_JSON)).rejects.toThrow();
 
-    expect(canvas.isEmpty(), 'canvas is not empty').toBeFalsy();
-    expect(canvas.getObjects().length).toBe(1);
-    // @ts-expect-error -- constructor function has type
-    expect(obj.constructor.type, 'first object is a Image object').toBe('Text');
+    expect(canvas.getObjects().length, 'canvas is unchanged').toBe(1);
+    expect(canvas.item(0)).toBeInstanceOf(Rect);
   });
 
   it('loads from JSON string with loadFromJSON with images not existing passing reviver', async () => {

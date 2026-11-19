@@ -34,6 +34,7 @@ import {
   IMG_HEIGHT,
 } from './StaticCanvas.fixtures';
 import { isJSDOM, sanitizeSVG } from '../../../../vitest.extend';
+import { FabricError, SignalAbortedError } from '../util/internals/console';
 
 describe('StaticCanvas', () => {
   const canvas = new StaticCanvas(undefined, {
@@ -1303,6 +1304,141 @@ describe('StaticCanvas', () => {
     abortController.abort();
     await expect(promise).rejects.toThrow();
     expect(canvas.renderOnAddRemove).toBe(true);
+  });
+
+  describe('loadFromJSON failure policy', () => {
+    it('rejects immediately with SignalAbortedError on a pre-aborted signal without touching the canvas', async () => {
+      const rect = makeRect();
+      canvas.add(rect);
+      canvas.renderOnAddRemove = true;
+      const abortController = new AbortController();
+      abortController.abort();
+
+      await expect(
+        canvas.loadFromJSON(PATH_JSON, undefined, {
+          signal: abortController.signal,
+        }),
+      ).rejects.toBeInstanceOf(SignalAbortedError);
+
+      expect(canvas.getObjects()).toEqual([rect]);
+      expect(canvas.renderOnAddRemove).toBe(true);
+    });
+
+    it('rejects the whole load and leaves the canvas unchanged when a node fails without reviver', async () => {
+      const rect = makeRect();
+      canvas.add(rect);
+
+      await expect(
+        canvas.loadFromJSON({
+          objects: [
+            makeRect().toObject(),
+            { type: 'UnregisteredExampleObject' },
+          ],
+        }),
+      ).rejects.toBeInstanceOf(FabricError);
+
+      expect(canvas.getObjects()).toEqual([rect]);
+    });
+
+    it('recovers a bad node with the reviver', async () => {
+      const reviver = vi.fn((serializedObject, instance, error) =>
+        error ? new Rect({ width: 42 }) : undefined,
+      );
+
+      await canvas.loadFromJSON(
+        { objects: [{ type: 'UnregisteredExampleObject' }] },
+        reviver,
+      );
+
+      expect(reviver).toHaveBeenCalledWith(
+        { type: 'UnregisteredExampleObject' },
+        undefined,
+        expect.any(FabricError),
+      );
+      expect(canvas.getObjects()).toHaveLength(1);
+      expect(canvas.item(0)).toBeInstanceOf(Rect);
+      expect(canvas.item(0).width).toBe(42);
+    });
+
+    it('rejects when a group contains a bad node and no reviver is provided', async () => {
+      const rect = makeRect();
+      canvas.add(rect);
+      const group = new Group([]).toObject();
+
+      await expect(
+        canvas.loadFromJSON({
+          objects: [
+            { ...group, objects: [{ type: 'UnregisteredExampleObject' }] },
+          ],
+        }),
+      ).rejects.toBeInstanceOf(FabricError);
+
+      expect(canvas.getObjects()).toEqual([rect]);
+    });
+
+    it('recovers a bad node inside a group with the reviver', async () => {
+      const group = new Group([]).toObject();
+
+      await canvas.loadFromJSON(
+        {
+          objects: [
+            {
+              ...group,
+              objects: [
+                makeRect().toObject(),
+                { type: 'UnregisteredExampleObject' },
+              ],
+            },
+          ],
+        },
+        (serializedObject, instance, error) =>
+          error ? new FabricText('placeholder') : undefined,
+      );
+
+      const loadedGroup = canvas.item(0);
+      expect(loadedGroup).toBeInstanceOf(Group);
+      expect((loadedGroup as Group).getObjects()).toHaveLength(2);
+      expect((loadedGroup as Group).item(1)).toBeInstanceOf(FabricText);
+    });
+
+    it('rejects instead of leaving raw JSON when the canvas clipPath cannot be enlivened', async () => {
+      await expect(
+        canvas.loadFromJSON({
+          objects: [],
+          clipPath: { type: 'UnregisteredExampleObject' },
+        }),
+      ).rejects.toBeInstanceOf(FabricError);
+
+      expect(canvas.clipPath).toBeUndefined();
+      expect(() => canvas.renderAll()).not.toThrow();
+    });
+
+    it('uses the reviver fallback for a canvas clipPath that fails to enliven', async () => {
+      const fallback = new Rect({ width: 10, height: 10 });
+
+      await canvas.loadFromJSON(
+        { objects: [], clipPath: { type: 'UnregisteredExampleObject' } },
+        (serializedObject, instance, error) => (error ? fallback : undefined),
+      );
+
+      expect(canvas.clipPath).toBe(fallback);
+      canvas.clipPath = undefined;
+    });
+
+    it('round-trips a normal document unchanged', async () => {
+      await canvas.loadFromJSON(PATH_JSON);
+      const serialized = canvas.toObject();
+      const otherCanvas = new StaticCanvas(undefined, {
+        renderOnAddRemove: false,
+        enableRetinaScaling: false,
+        width: 200,
+        height: 200,
+      });
+
+      await otherCanvas.loadFromJSON(serialized);
+
+      expect(otherCanvas.toObject()).toEqual(serialized);
+    });
   });
 
   it('loads from JSON string correctly', async () => {

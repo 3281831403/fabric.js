@@ -1,11 +1,68 @@
-import { enlivenObjects, loadImage } from './objectEnlive';
+import {
+  enlivenObjects,
+  enlivenObjectEnlivables,
+  loadImage,
+} from './objectEnlive';
 import { Rect, type RectProps } from '../../shapes/Rect';
 import { Shadow } from '../../Shadow';
 import { classRegistry } from '../../ClassRegistry';
 import { FabricImage } from '../../../../../fabric';
-import { FabricError } from '../internals/console';
+import { FabricError, SignalAbortedError } from '../internals/console';
 
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+
+describe('enlivenObjects failure policy', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('rejects immediately with SignalAbortedError on a pre-aborted signal', async () => {
+    const abortController = new AbortController();
+    abortController.abort();
+    await expect(
+      enlivenObjects([{ type: 'Rect' }], { signal: abortController.signal }),
+    ).rejects.toBeInstanceOf(SignalAbortedError);
+    await expect(
+      enlivenObjectEnlivables(
+        { clipPath: { type: 'Rect' } },
+        { signal: abortController.signal },
+      ),
+    ).rejects.toBeInstanceOf(SignalAbortedError);
+  });
+
+  it('routes an unregistered type to the reviver instead of throwing', async () => {
+    const serialized = { type: 'UnregisteredExampleObject' };
+    const fallback = new Rect({ width: 42 });
+    const reviver = vi.fn(() => fallback);
+
+    const objects = await enlivenObjects<Rect>([serialized], { reviver });
+
+    expect(reviver).toHaveBeenCalledTimes(1);
+    expect(reviver).toHaveBeenCalledWith(
+      serialized,
+      undefined,
+      expect.any(FabricError),
+    );
+    expect(objects).toEqual([fallback]);
+  });
+
+  it('rejects when an object cannot be enlivened and no reviver is provided', async () => {
+    await expect(
+      enlivenObjects([{ type: 'UnregisteredExampleObject' }]),
+    ).rejects.toBeInstanceOf(FabricError);
+  });
+
+  it('enlivenObjectEnlivables never leaves raw JSON behind', async () => {
+    const serialized = { clipPath: { type: 'UnregisteredExampleObject' } };
+    await expect(enlivenObjectEnlivables(serialized)).rejects.toBeInstanceOf(
+      FabricError,
+    );
+
+    const fallback = new Rect({ width: 42 });
+    const enlived = await enlivenObjectEnlivables(serialized, {
+      reviver: () => fallback,
+    });
+    expect(enlived).toEqual({ clipPath: fallback });
+  });
+});
 
 describe('enlivenObjects reviver', () => {
   afterEach(() => vi.restoreAllMocks());

@@ -104,7 +104,7 @@ describe('Group', () => {
     }).catch((e) => {
       expect(e instanceof SignalAbortedError).toBe(true);
       expect(e.message).toBe(
-        `fabric: loadImage 'options.signal' is in 'aborted' state`,
+        `fabric: enlivenObjects 'options.signal' is in 'aborted' state`,
       );
     });
   });

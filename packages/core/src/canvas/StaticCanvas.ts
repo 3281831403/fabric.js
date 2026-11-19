@@ -45,7 +45,11 @@ import type { CSSDimensions } from './DOMManagers/util';
 import type { FabricObject } from '../shapes/Object/FabricObject';
 import type { StaticCanvasOptions } from './StaticCanvasOptions';
 import { staticCanvasDefaults } from './StaticCanvasOptions';
-import { log, FabricError } from '../util/internals/console';
+import {
+  log,
+  FabricError,
+  SignalAbortedError,
+} from '../util/internals/console';
 import { getDevicePixelRatio } from '../env';
 import { escapeXml } from '../util/lang_string';
 
@@ -1216,6 +1220,7 @@ export class StaticCanvas<
    * @param {String|Object} json JSON string or object
    * @param {Promise<FabricObject> | Promise<void> | void} [reviver] Method for further parsing of JSON elements, called after each fabric object created with the instance
    * if creation was successfully or with defined error if not. If a FabricObject is returned in the reviver, and an error occurred, this instance will be used in place of that one witch generated error.
+   * Without a reviver, an object that fails to load rejects the entire promise and the canvas is left unchanged.
    * @param {Object} [options] options
    * @param {AbortSignal} [options.signal] see https://developer.mozilla.org/en-US/docs/Web/API/AbortController/signal
    * @param {(url: string) => boolean | Promise<boolean>} [options.resourceValidator] validates an external resource URL before loading it; return `false` to skip it
@@ -1243,6 +1248,9 @@ export class StaticCanvas<
     reviver?: EnlivenObjectOptions<FabricObject>['reviver'],
     options: EnlivenObjectOptions<FabricObject> = {},
   ): Promise<this> {
+    if (options.signal && options.signal.aborted) {
+      return Promise.reject(new SignalAbortedError('loadFromJSON'));
+    }
     if (!json) {
       return Promise.reject(new FabricError('`json` is undefined'));
     }
@@ -1268,7 +1276,7 @@ export class StaticCanvas<
           overlayColor: overlay,
           clipPath,
         },
-        options,
+        { reviver, ...options },
       ),
     ])
       .then(([enlived, enlivedMap]) => {

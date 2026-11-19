@@ -16,3 +16,9 @@ export class SignalAbortedError extends FabricError {
     super(`${context} 'options.signal' is in 'aborted' state`);
   }
 }
+
+/**
+ * Thrown when `resourceValidator` disallows a resource.
+ * The resource is skipped intentionally, so it is not treated as a loading failure.
+ */
+export class ResourceSkippedError extends FabricError {}

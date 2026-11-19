@@ -1,11 +1,6 @@
 import type { CollectionEvents, ObjectEvents } from '../EventTypeDefs';
 import { createCollectionMixin } from '../Collection';
-import type {
-  TClassProperties,
-  TSVGReviver,
-  TOptions,
-  Abortable,
-} from '../typedefs';
+import type { TClassProperties, TSVGReviver, TOptions } from '../typedefs';
 import {
   invertTransform,
   multiplyTransformMatrices,
@@ -13,6 +8,7 @@ import {
 import {
   enlivenObjectEnlivables,
   enlivenObjects,
+  type EnlivenObjectOptions,
 } from '../util/misc/objectEnlive';
 import { applyTransformToObject } from '../util/misc/objectTransforms';
 import { FabricObject } from './Object/FabricObject';
@@ -677,11 +673,13 @@ export class Group
    * @todo support loading from svg
    * @private
    * @param {Object} object Object to create a group from
+   * @param {EnlivenObjectOptions} [options] options passed down to enliven the group's objects,
+   * including an optional reviver called for each child object
    * @returns {Promise<Group>}
    */
   static fromObject<T extends TOptions<SerializedGroupProps>>(
     { type, objects = [], layoutManager, ...options }: T,
-    abortable?: Abortable,
+    abortable?: EnlivenObjectOptions<FabricObject>,
   ) {
     return Promise.all([
       enlivenObjects<FabricObject>(objects, abortable),
