@@ -183,7 +183,11 @@ export class FabricImage<
 
   static type = 'Image';
 
-  static cacheProperties = [...cacheProperties, ...IMAGE_PROPS];
+  static cacheProperties = [
+    ...cacheProperties,
+    ...IMAGE_PROPS,
+    'imageSmoothing',
+  ];
 
   static ownDefaults = imageDefaultValues;
 
@@ -295,7 +299,7 @@ export class FabricImage<
    * Returns original size of an image
    */
   getOriginalSize(): TSize {
-    const element = this.getElement();
+    const element = this._originalElement;
     if (!element) {
       return {
         width: 0,
@@ -374,6 +378,9 @@ export class FabricImage<
   _toSVG() {
     const imageMarkup: string[] = [],
       element = this._element,
+      // the exported size describes the full image, filters may have
+      // resized the element currently in use (e.g. a Resize filter)
+      originalElement = this._originalElement,
       x = -this.width / 2,
       y = -this.height / 2;
     let svgString: string[] = [],
@@ -412,9 +419,11 @@ export class FabricImage<
         // by wrapping it in container <g> element with actual transformation, then offsetting object to the top/left
         // so that object's center aligns with container's left/top
       }" width="${
-        element.width || (element as HTMLImageElement).naturalWidth
+        originalElement.width ||
+        (originalElement as HTMLImageElement).naturalWidth
       }" height="${
-        element.height || (element as HTMLImageElement).naturalHeight
+        originalElement.height ||
+        (originalElement as HTMLImageElement).naturalHeight
       }"${imageRendering}${clipPath}></image>\n`,
     );
 
@@ -580,14 +589,8 @@ export class FabricImage<
       this._element as HTMLCanvasElement,
       this.cacheKey,
     );
-    if (
-      this._originalElement.width !== this._element.width ||
-      this._originalElement.height !== this._element.height
-    ) {
-      this._filterScalingX = this._element.width / this._originalElement.width;
-      this._filterScalingY =
-        this._element.height / this._originalElement.height;
-    }
+    this._filterScalingX = this._element.width / sourceWidth;
+    this._filterScalingY = this._element.height / sourceHeight;
   }
 
   /**

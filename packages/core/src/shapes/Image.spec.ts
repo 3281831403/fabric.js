@@ -7,12 +7,14 @@ import { loadSVGFromString } from '../parser/loadSVGFromString';
 import { describe, expect, it, test, vi } from 'vitest';
 import { Group } from './Group';
 import { Contrast } from '../filters/Contrast';
+import { Invert } from '../filters/Invert';
 import { Resize } from '../filters/Resize';
 import {
   FabricObject,
   getFabricDocument,
   getFilterBackend,
   Rect,
+  StaticCanvas,
   WebGLFilterBackend,
 } from '../../../../fabric';
 import { removeTransformMatrixForSvgParsing } from '../util';
@@ -780,6 +782,195 @@ describe('FabricImage', () => {
 
     expect(image.dirty, 'After apply filter dirty is true').toBe(true);
     expect(group.dirty, 'After apply filter dirty is true').toBe(true);
+  });
+
+  describe('applyFilters recomputes from the original element', () => {
+    const SOURCE_WIDTH = 40;
+    const SOURCE_HEIGHT = 20;
+
+    function createCanvasSource(
+      width = SOURCE_WIDTH,
+      height = SOURCE_HEIGHT,
+    ): HTMLCanvasElement {
+      const el = getFabricDocument().createElement('canvas');
+      el.width = width;
+      el.height = height;
+      const ctx = el.getContext('2d')!;
+      ctx.fillStyle = 'rgb(200,100,50)';
+      ctx.fillRect(0, 0, width, height);
+      return el;
+    }
+
+    function getPixels(element: HTMLCanvasElement): number[] {
+      return Array.from(
+        element
+          .getContext('2d')!
+          .getImageData(0, 0, element.width, element.height).data,
+      );
+    }
+
+    function countOpaque(element: HTMLCanvasElement): number {
+      return getPixels(element).filter(
+        (value, i) => i % 4 === 3 && value === 255,
+      ).length;
+    }
+
+    function createFilteredImage(scale: number): FabricImage {
+      const image = new FabricImage(createCanvasSource());
+      image.filters = [new Resize({ scaleX: scale, scaleY: scale })];
+      image.applyFilters();
+      return image;
+    }
+
+    it('applying the same filters again yields identical pixels', () => {
+      const image = createFilteredImage(0.5);
+      const firstPixels = getPixels(image.getElement() as HTMLCanvasElement);
+      const firstOpaque = countOpaque(image.getElement() as HTMLCanvasElement);
+
+      image.applyFilters();
+
+      const element = image.getElement() as HTMLCanvasElement;
+      expect(element.width, 'element width stays 20').toBe(20);
+      expect(element.height, 'element height stays 10').toBe(10);
+      expect(countOpaque(element), 'opaque pixels do not decay').toBe(
+        firstOpaque,
+      );
+      expect(getPixels(element), 'pixels are identical').toEqual(firstPixels);
+      expect(
+        getPixels(element),
+        'pixels match a freshly filtered image',
+      ).toEqual(
+        getPixels(createFilteredImage(0.5).getElement() as HTMLCanvasElement),
+      );
+    });
+
+    it('editing the filter chain reapplies from the original element', () => {
+      const filter = new Resize({ scaleX: 0.5, scaleY: 0.5 });
+      const image = new FabricImage(createCanvasSource());
+      image.filters = [filter];
+      image.applyFilters();
+
+      filter.scaleX = 0.25;
+      filter.scaleY = 0.25;
+      image.applyFilters();
+
+      const element = image.getElement() as HTMLCanvasElement;
+      expect(element.width, 'element width is resized to 10').toBe(10);
+      expect(element.height, 'element height is resized to 5').toBe(5);
+      expect(
+        getPixels(element),
+        'pixels match a fresh image filtered at 0.25',
+      ).toEqual(
+        getPixels(createFilteredImage(0.25).getElement() as HTMLCanvasElement),
+      );
+    });
+
+    it('removing the resizing filter from the chain resets filter scaling', () => {
+      const image = new FabricImage(createCanvasSource());
+      image.filters = [new Resize({ scaleX: 0.25, scaleY: 0.25 })];
+      image.applyFilters();
+
+      image.filters = [new Invert()];
+      image.applyFilters();
+
+      const element = image.getElement() as HTMLCanvasElement;
+      expect(element.width, 'element is back to source width').toBe(
+        SOURCE_WIDTH,
+      );
+      expect(element.height, 'element is back to source height').toBe(
+        SOURCE_HEIGHT,
+      );
+      // @ts-expect-error -- protected prop
+      expect(image._filterScalingX, 'filter scaling X is reset').toBe(1);
+      // @ts-expect-error -- protected prop
+      expect(image._filterScalingY, 'filter scaling Y is reset').toBe(1);
+
+      const fresh = new FabricImage(createCanvasSource());
+      fresh.filters = [new Invert()];
+      fresh.applyFilters();
+      expect(getPixels(element), 'pixels match a fresh inverted image').toEqual(
+        getPixels(fresh.getElement() as HTMLCanvasElement),
+      );
+    });
+
+    it('stays consistent across repeated applications and chain edits', () => {
+      const filter = new Resize({ scaleX: 0.5, scaleY: 0.5 });
+      const image = new FabricImage(createCanvasSource());
+      image.filters = [filter];
+
+      for (const scale of [0.5, 0.25, 0.5, 0.25]) {
+        filter.scaleX = scale;
+        filter.scaleY = scale;
+        image.applyFilters();
+        image.applyFilters();
+        expect(
+          getPixels(image.getElement() as HTMLCanvasElement),
+          `pixels match a fresh image filtered at ${scale}`,
+        ).toEqual(
+          getPixels(
+            createFilteredImage(scale).getElement() as HTMLCanvasElement,
+          ),
+        );
+      }
+    });
+
+    it('getOriginalSize returns the original size after filtering', () => {
+      const image = createFilteredImage(0.5);
+
+      expect(
+        image.getOriginalSize(),
+        'original size is unaffected by filters',
+      ).toEqual({ width: SOURCE_WIDTH, height: SOURCE_HEIGHT });
+    });
+
+    it('toSVG exports the original image size after filtering', () => {
+      const image = createFilteredImage(0.5);
+
+      const svg = image.toSVG();
+
+      expect(svg, 'SVG exports the original image size').toContain(
+        `width="${SOURCE_WIDTH}" height="${SOURCE_HEIGHT}"`,
+      );
+    });
+
+    it('changing imageSmoothing in a cached group affects the next render', () => {
+      const source = getFabricDocument().createElement('canvas');
+      source.width = 4;
+      source.height = 4;
+      const sourceCtx = source.getContext('2d')!;
+      sourceCtx.fillStyle = 'rgb(255,0,0)';
+      sourceCtx.fillRect(0, 0, 2, 4);
+      sourceCtx.fillStyle = 'rgb(0,0,255)';
+      sourceCtx.fillRect(2, 0, 2, 4);
+
+      const image = new FabricImage(source, { scaleX: 8, scaleY: 8 });
+      const group = new Group([image]);
+      const canvas = new StaticCanvas(undefined, {
+        width: 64,
+        height: 64,
+        enableRetinaScaling: false,
+      });
+      canvas.add(group);
+      canvas.renderAll();
+      const readPixels = () =>
+        canvas.getContext().getImageData(0, 0, 64, 64).data;
+      const before = Array.from(readPixels());
+
+      image.set('imageSmoothing', false);
+
+      expect(image.dirty, 'image is dirtied by imageSmoothing change').toBe(
+        true,
+      );
+      expect(group.dirty, 'group cache is invalidated').toBe(true);
+
+      canvas.renderAll();
+      const after = Array.from(readPixels());
+
+      expect(after, 'next render reflects the smoothing change').not.toEqual(
+        before,
+      );
+      canvas.dispose();
+    });
   });
 
   it('_renderFill respects source boundaries crop < 0 and width > elWidth', () => {

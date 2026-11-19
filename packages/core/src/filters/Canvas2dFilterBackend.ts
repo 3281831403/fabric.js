@@ -31,6 +31,16 @@ export class Canvas2dFilterBackend {
     sourceHeight: number,
     targetCanvas: HTMLCanvasElement,
   ): T2DPipelineState | void {
+    // the target canvas may be reused across filter applications with a
+    // different size (e.g. a Resize filter shrunk it). Restore the source
+    // size before drawing so the pipeline always starts from the full source.
+    if (
+      targetCanvas.width !== sourceWidth ||
+      targetCanvas.height !== sourceHeight
+    ) {
+      targetCanvas.width = sourceWidth;
+      targetCanvas.height = sourceHeight;
+    }
     const ctx = targetCanvas.getContext('2d', {
       willReadFrequently: true,
       desynchronized: true,
