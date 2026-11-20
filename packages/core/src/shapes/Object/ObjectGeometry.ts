@@ -8,7 +8,7 @@ import type {
 } from '../../typedefs';
 import { SCALE_X, SCALE_Y, iMatrix } from '../../constants';
 import { Intersection } from '../../Intersection';
-import { Point } from '../../Point';
+import { Point, ZERO } from '../../Point';
 import { makeBoundingBoxFromPoints } from '../../util/misc/boundingBoxFromPoints';
 import {
   createRotateMatrix,
@@ -16,6 +16,7 @@ import {
   composeMatrix,
   invertTransform,
   multiplyTransformMatrices,
+  qrDecompose,
   transformPoint,
   calcPlaneRotation,
   calcPlaneZoom,
@@ -73,6 +74,12 @@ export class ObjectGeometry<EventSpec extends ObjectEvents = ObjectEvents>
    * storage cache for object full transform matrix
    */
   declare matrixCache?: TMatrixCache;
+
+  /**
+   * storage cache for the cumulative uniform stroke of descendant objects
+   * @see _getNestedUniformStroke
+   */
+  declare _nestedUniformStrokeCache?: Point;
 
   /**
    * A Reference of the Canvas where the object is actually added
@@ -539,6 +546,43 @@ export class ObjectGeometry<EventSpec extends ObjectEvents = ObjectEvents>
   }
 
   /**
+   * Return the object scale factor counting also the group scaling
+   * @return {Point}
+   */
+  getObjectScaling() {
+    // if the object is a top level one, on the canvas, we go for simple aritmetic
+    // otherwise the complex method with angles will return approximations and decimals
+    // and will likely kill the cache when not needed
+    // https://github.com/fabricjs/fabric.js/issues/7157
+    if (!this.group) {
+      return new Point(Math.abs(this.scaleX), Math.abs(this.scaleY));
+    }
+    // if we are inside a group total zoom calculation is complex, we defer to generic matrices
+    const options = qrDecompose(this.calcTransformMatrix());
+    return new Point(Math.abs(options.scaleX), Math.abs(options.scaleY));
+  }
+
+  /**
+   * Scale factor applied by the ancestor groups only, without the object's own
+   * scale. It is derived by walking up the group chain and decomposing each
+   * group's own matrix, never touching the object's center point. This makes
+   * it safe to use while the center (and therefore the transform matrix) is
+   * still being computed during construction and layout.
+   * @return {Point}
+   */
+  protected _getAncestorScaling(): Point {
+    const scale = new Point(1, 1);
+    let ancestor = this.group;
+    while (ancestor) {
+      const { scaleX, scaleY } = qrDecompose(ancestor.calcOwnMatrix());
+      scale.x *= Math.abs(scaleX);
+      scale.y *= Math.abs(scaleY);
+      ancestor = ancestor.group;
+    }
+    return scale;
+  }
+
+  /**
    * Calculate object dimensions from its properties
    * @private
    * @returns {Point} dimensions
@@ -596,6 +640,54 @@ export class ObjectGeometry<EventSpec extends ObjectEvents = ObjectEvents>
   declare group?: Group;
 
   /**
+   * Cumulative size, expressed in this object's own plane, of the uniform
+   * strokes carried by the object's descendants. A group's `width`/`height`
+   * are the layout result of its children and therefore already include the
+   * uniform stroke of every descendant. Unlike the rest of the group content,
+   * that part stays constant on screen instead of being scaled together with
+   * the group's ancestors, so it has to be subtracted before scaling and added
+   * back after.
+   *
+   * The value only depends on the subtree structure and the descendants'
+   * stroke properties (never on transforms), so it is memoized and recomputed
+   * solely when the subtree or a stroke property changes.
+   * @returns {Point} cumulative uniform stroke size in the object's plane
+   */
+  _getNestedUniformStroke(): Point {
+    if (this._nestedUniformStrokeCache) {
+      return this._nestedUniformStrokeCache;
+    }
+    const objects = (this as unknown as { _objects?: ObjectGeometry[] })
+      ._objects;
+    const value =
+      objects?.reduce(
+        (total, child) =>
+          total
+            .add(
+              child.strokeUniform && !child.isStrokeAccountedForInDimensions()
+                ? new Point(child.strokeWidth, child.strokeWidth)
+                : new Point(),
+            )
+            .add(child._getNestedUniformStroke()),
+        new Point(),
+      ) ?? new Point();
+    this._nestedUniformStrokeCache = value;
+    return value;
+  }
+
+  /**
+   * Drops the memoized nested uniform stroke, both for this object and for all
+   * of its ancestor groups, since a change in a descendant affects every group
+   * up the chain. Cheap no-op for leaf objects.
+   */
+  protected _invalidateNestedUniformStroke(): void {
+    this._nestedUniformStrokeCache = undefined;
+    for (let ancestor = this.group; ancestor; ancestor = ancestor.group) {
+      ancestor._nestedUniformStrokeCache = undefined;
+    }
+  }
+
+  /**
    * Calculate object bounding box dimensions from its properties scale, skew.
    * This bounding box is aligned with object angle and not with canvas axis or screen.
    * @param {Object} [options]
@@ -623,15 +715,50 @@ export class ObjectGeometry<EventSpec extends ObjectEvents = ObjectEvents>
     };
     // stroke is applied before/after transformations are applied according to `strokeUniform`
     const strokeWidth = dimOptions.strokeWidth;
-    let preScalingStrokeValue = strokeWidth,
-      postScalingStrokeValue = 0;
+    let preScalingStrokeValue = strokeWidth;
+    let postScalingStrokeX = 0;
+    let postScalingStrokeY = 0;
 
     if (this.strokeUniform) {
       preScalingStrokeValue = 0;
-      postScalingStrokeValue = strokeWidth;
+      if (this.group) {
+        // a uniform stroke keeps a constant width on screen, including when the
+        // object is nested inside scaled groups, so in the scene-space
+        // dimensions its contribution is the stroke width divided by the
+        // cumulative scale of the object and all of its ancestors.
+        const ancestorScaling = this._getAncestorScaling();
+        postScalingStrokeX =
+          strokeWidth / (Math.abs(this.scaleX) * ancestorScaling.x);
+        postScalingStrokeY =
+          strokeWidth / (Math.abs(this.scaleY) * ancestorScaling.y);
+      } else {
+        // a top level object is measured in its own plane: the stroke is added
+        // unscaled and stays constant on screen by itself.
+        postScalingStrokeX = strokeWidth;
+        postScalingStrokeY = strokeWidth;
+      }
     }
-    const dimX = dimOptions.width + preScalingStrokeValue,
-      dimY = dimOptions.height + preScalingStrokeValue,
+    // Uniform strokes of descendants are already included in a group's
+    // `width`/`height` and stay constant on screen no matter how the object or
+    // its ancestor groups are scaled. Exclude them from the local content going
+    // through the transform and add them back divided by the ancestor scaling,
+    // so that their scene-space size is only affected by the object's own
+    // scale, never by the groups above it.
+    // The plain call (no option overrides) is the geometry/cache pipeline that
+    // represents scene space; control and skew calculations keep using the raw
+    // dimensions.
+    const usesOwnTransform =
+      options.scaleX === undefined && options.scaleY === undefined;
+    const nestedUniformStroke = usesOwnTransform
+      ? this._getNestedUniformStroke()
+      : ZERO;
+    const ancestorScaling =
+      nestedUniformStroke.x === 0 && nestedUniformStroke.y === 0
+        ? new Point(1, 1)
+        : this._getAncestorScaling();
+    const dimX =
+        dimOptions.width + preScalingStrokeValue - nestedUniformStroke.x,
+      dimY = dimOptions.height + preScalingStrokeValue - nestedUniformStroke.y,
       noSkew = dimOptions.skewX === 0 && dimOptions.skewY === 0;
     let finalDimensions;
     if (noSkew) {
@@ -647,7 +774,12 @@ export class ObjectGeometry<EventSpec extends ObjectEvents = ObjectEvents>
       );
     }
 
-    return finalDimensions.scalarAdd(postScalingStrokeValue);
+    return finalDimensions.add(
+      new Point(
+        postScalingStrokeX + nestedUniformStroke.x / ancestorScaling.x,
+        postScalingStrokeY + nestedUniformStroke.y / ancestorScaling.y,
+      ),
+    );
   }
 
   /**

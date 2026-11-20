@@ -33,7 +33,7 @@ import {
   toDataURL,
   toBlob,
 } from '../../util/misc/dom';
-import { invertTransform, qrDecompose } from '../../util/misc/matrix';
+import { invertTransform } from '../../util/misc/matrix';
 import { enlivenObjectEnlivables } from '../../util/misc/objectEnlive';
 import {
   resetObjectTransform,
@@ -523,23 +523,6 @@ export class FabricObject<
   }
 
   /**
-   * Return the object scale factor counting also the group scaling
-   * @return {Point}
-   */
-  getObjectScaling() {
-    // if the object is a top level one, on the canvas, we go for simple aritmetic
-    // otherwise the complex method with angles will return approximations and decimals
-    // and will likely kill the cache when not needed
-    // https://github.com/fabricjs/fabric.js/issues/7157
-    if (!this.group) {
-      return new Point(Math.abs(this.scaleX), Math.abs(this.scaleY));
-    }
-    // if we are inside a group total zoom calculation is complex, we defer to generic matrices
-    const options = qrDecompose(this.calcTransformMatrix());
-    return new Point(Math.abs(options.scaleX), Math.abs(options.scaleY));
-  }
-
-  /**
    * Return the object scale factor counting also the group scaling, zoom and retina
    * @return {Object} object with scaleX and scaleY properties
    */
@@ -615,6 +598,11 @@ export class FabricObject<
       (this.constructor as typeof FabricObject).cacheProperties.includes(key)
     ) {
       this.dirty = true;
+    }
+    // the cumulative uniform stroke of the ancestor groups depends on the
+    // stroke width/flag of this object
+    if (isChanged && (key === 'strokeWidth' || key === 'strokeUniform')) {
+      this._invalidateNestedUniformStroke();
     }
     // a dirty child makes the parent dirty.
     // but a non dirty child does not make the parent not dirty.

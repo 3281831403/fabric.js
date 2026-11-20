@@ -276,6 +276,9 @@ export class Group
    * @param {FabricObject[]} targets
    */
   _onAfterObjectsChange(type: 'added' | 'removed', targets: FabricObject[]) {
+    // the subtree structure changed, so the cumulative uniform stroke of this
+    // group and every ancestor group has to be recomputed
+    this._invalidateNestedUniformStroke();
     this.layoutManager.performLayout({
       type,
       targets,

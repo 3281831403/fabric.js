@@ -35,19 +35,26 @@ export const getObjectBounds = (
     ? object.getRelativeCenterPoint().transform(t)
     : object.getRelativeCenterPoint();
   const accountForStroke = !object['isStrokeAccountedForInDimensions']();
-  const strokeUniformVector =
+
+  // Uniform strokes are constant on screen, also across scaled ancestor
+  // groups. Gather the uniform stroke carried by the object itself plus the
+  // ones carried by its descendants (the latter are already included in the
+  // width/height of a group and therefore have to be removed before scaling).
+  const ownUniformStroke =
     strokeUniform && accountForStroke
-      ? sendVectorToPlane(
-          new Point(strokeWidth, strokeWidth),
-          undefined,
-          destinationGroup.calcTransformMatrix(),
-        )
+      ? new Point(strokeWidth, strokeWidth)
       : ZERO;
+  const nestedUniformStroke = object['_getNestedUniformStroke']();
+  const strokeUniformVector = sendVectorToPlane(
+    ownUniformStroke.add(nestedUniformStroke),
+    undefined,
+    t ?? currentGroup?.calcOwnMatrix(),
+  );
   const scalingStrokeWidth =
     !strokeUniform && accountForStroke ? strokeWidth : 0;
   const sizeVector = sizeAfterTransform(
-    width + scalingStrokeWidth,
-    height + scalingStrokeWidth,
+    width + scalingStrokeWidth - nestedUniformStroke.x,
+    height + scalingStrokeWidth - nestedUniformStroke.y,
     multiplyTransformMatrixArray([t, object.calcOwnMatrix()], true),
   )
     .add(strokeUniformVector)

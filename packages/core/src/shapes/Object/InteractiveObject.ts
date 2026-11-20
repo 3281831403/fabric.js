@@ -500,7 +500,11 @@ export class InteractiveFabricObject<
         stroke = this.isStrokeAccountedForInDimensions()
           ? ZERO
           : (this.strokeUniform
-              ? new Point().scalarAdd(this.canvas ? this.canvas.getZoom() : 1)
+              ? // a uniform stroke is constant on screen, so in this plane it is
+                // divided by the object's cumulative scale (including ancestor
+                // groups). Canvas zoom is already part of `options` and is
+                // applied to the whole box by the surrounding transform.
+                this.getObjectScaling()
               : // this is extremely confusing. options comes from the upper function
                 // and is the qrDecompose of a matrix that takes in account zoom too
                 new Point(options.scaleX, options.scaleY)
